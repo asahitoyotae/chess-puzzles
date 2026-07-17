@@ -28,8 +28,10 @@ app.post("/puzzles", async (req, res) => {
 
     const result = await pool.query(
       `SELECT * FROM puzzles
-       WHERE ratingId = ANY($1::text[])`,
-      [ratingIds],
+       LIMIT 10`,
+      //     `SELECT * FROM puzzles
+      //      WHERE ratingId = ANY($1::text[])`,
+      //     [ratingIds],
     );
 
     res.json(result.rows);
