@@ -16,9 +16,6 @@ app.get("/", (req, res) => {
 // Body: { ratingIds: string[] }  e.g. ["221B", "453B", "566B", "8874B"]
 // The frontend pre-generates unique random ratingIds for the current band
 // and excludes already-solved ones, so ORDER BY RANDOM() is not needed here.
-//     `SELECT * FROM puzzles
-//      WHERE ratingId = ANY($1::text[])`,
-//      [ratingIds],
 app.post("/puzzles", async (req, res) => {
   try {
     const ratingIds = Array.isArray(req.body?.ratingIds)
@@ -31,7 +28,8 @@ app.post("/puzzles", async (req, res) => {
 
     const result = await pool.query(
       `SELECT * FROM puzzles
-       LIMIT 10`,
+       WHERE ratingId = ANY($1::text[])`,
+      [ratingIds],
     );
 
     res.json(result.rows);
@@ -45,7 +43,7 @@ app.post("/puzzles", async (req, res) => {
   }
 });
 
-pool
+/*pool
   .query("SELECT NOW()")
   .then((result) => {
     console.log("✅ Connected to PostgreSQL");
@@ -54,7 +52,7 @@ pool
   .catch((err) => {
     console.error("❌ PostgreSQL connection failed");
     console.error(err);
-  });
+  });*/
 
 app.listen(PORT, () => {
   console.log(`Server runing in ${PORT}`);
