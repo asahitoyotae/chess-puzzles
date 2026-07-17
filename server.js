@@ -45,6 +45,17 @@ app.post("/puzzles", async (req, res) => {
   }
 });
 
+pool
+  .query("SELECT NOW()")
+  .then((result) => {
+    console.log("✅ Connected to PostgreSQL");
+    console.log(result.rows[0]);
+  })
+  .catch((err) => {
+    console.error("❌ PostgreSQL connection failed");
+    console.error(err);
+  });
+
 app.listen(PORT, () => {
   console.log(`Server runing in ${PORT}`);
 });
