@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const pool = require("./database");
+const { updateChessComLeaderboards } = require("./helpers/chesscom");
+const cron = require("node-cron");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,10 +14,6 @@ app.get("/", (req, res) => {
   res.send("Chess API is running for testing only");
 });
 
-// Get Puzzles by ratingId
-// Body: { ratingIds: string[] }  e.g. ["221B", "453B", "566B", "8874B"]
-// The frontend pre-generates unique random ratingIds for the current band
-// and excludes already-solved ones, so ORDER BY RANDOM() is not needed here.
 app.post("/puzzles", async (req, res) => {
   try {
     const ratingIds = Array.isArray(req.body?.ratingIds)
@@ -27,8 +25,7 @@ app.post("/puzzles", async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT * FROM puzzles
-       WHERE ratingId = ANY($1::text[])`,
+      `SELECT * FROM puzzles WHERE ratingId = ANY($1::text[])`,
       [ratingIds],
     );
 
@@ -36,24 +33,18 @@ app.post("/puzzles", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).send("Database error");
-
-    res.status(500).json({
-      message: error.message,
-    });
   }
 });
 
-/*pool
-  .query("SELECT NOW()")
-  .then((result) => {
-    console.log("✅ Connected to PostgreSQL");
-    console.log(result.rows[0]);
-  })
-  .catch((err) => {
-    console.error("❌ PostgreSQL connection failed");
-    console.error(err);
-  });*/
-
 app.listen(PORT, () => {
-  console.log(`Server runing in ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
+});
+
+// Run once on startup
+updateChessComLeaderboards(pool);
+
+// Then refresh every 6 hours
+cron.schedule("0 */1 * * *", () => {
+  console.log("Running scheduled leaderboard update...");
+  updateChessComLeaderboards(pool);
 });
