@@ -36,6 +36,36 @@ app.post("/puzzles", async (req, res) => {
   }
 });
 
+app.get("/chesscom", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT *
+      FROM (
+        (SELECT * FROM chesscom_players
+        ORDER BY rapid_rating DESC
+        LIMIT 20)
+
+        UNION
+
+        (SELECT * FROM chesscom_players
+        ORDER BY blitz_rating DESC
+        LIMIT 20)
+
+        UNION
+
+        (SELECT * FROM chesscom_players
+        ORDER BY bullet_rating DESC
+        LIMIT 20)
+      ) AS top_players;
+    `);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send("Database error");
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
