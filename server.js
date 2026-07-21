@@ -39,24 +39,7 @@ app.post("/puzzles", async (req, res) => {
 app.get("/chesscom", async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT DISTINCT *
-      FROM (
-        (SELECT * FROM chesscom_players
-        ORDER BY rapid_rating DESC
-        LIMIT 20)
-
-        UNION
-
-        (SELECT * FROM chesscom_players
-        ORDER BY blitz_rating DESC
-        LIMIT 20)
-
-        UNION
-
-        (SELECT * FROM chesscom_players
-        ORDER BY bullet_rating DESC
-        LIMIT 20)
-      ) AS top_players;
+      SELECT * FROM chesscom_players
     `);
 
     res.json(result.rows);
@@ -78,3 +61,22 @@ cron.schedule("0 */1 * * *", () => {
   console.log("Running scheduled leaderboard update...");
   updateChessComLeaderboards(pool);
 });
+
+/* SELECT DISTINCT *
+      FROM (
+        (SELECT * FROM chesscom_players
+        ORDER BY rapid_rating DESC
+        LIMIT 20)
+
+        UNION
+
+        (SELECT * FROM chesscom_players
+        ORDER BY blitz_rating DESC
+        LIMIT 20)
+
+        UNION
+
+        (SELECT * FROM chesscom_players
+        ORDER BY bullet_rating DESC
+        LIMIT 20)
+      ) AS top_players;*/
