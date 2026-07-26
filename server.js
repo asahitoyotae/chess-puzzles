@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 const pool = require("./database");
 const { updateChessComLeaderboards } = require("./helpers/chesscom");
 const cron = require("node-cron");
@@ -7,11 +8,39 @@ const cron = require("node-cron");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+const allowedOrigins = ["https://chess45.com", "https://www.chess45.com"];
+
+app.use(
+  cors({
+    origin: allowedOrigins,
+  }),
+);
+
+app.use((req, res, next) => {
+  const origin = req.get("origin");
+
+  if (origin && !allowedOrigins.includes(origin)) {
+    return res.status(403).send("Forbidden");
+  }
+
+  next();
+});
+
 app.use(express.json());
 
+// Rate limit: 3 requests per minute per IP, applied to all API endpoints
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 3, // limit each IP to 3 requests per window
+  standardHeaders: true, // return rate limit info in RateLimit-* headers
+  legacyHeaders: false, // disable X-RateLimit-* headers
+  message: { error: "Too many requests, please try again in a minute." },
+});
+
+app.use(apiLimiter);
+
 app.get("/", (req, res) => {
-  res.send("Chess API is running for testing only");
+  res.send("Chess API is running");
 });
 
 app.post("/puzzles", async (req, res) => {
@@ -61,22 +90,3 @@ cron.schedule("0 */1 * * *", () => {
   console.log("Running scheduled leaderboard update...");
   updateChessComLeaderboards(pool);
 });
-
-/* SELECT DISTINCT *
-      FROM (
-        (SELECT * FROM chesscom_players
-        ORDER BY rapid_rating DESC
-        LIMIT 20)
-
-        UNION
-
-        (SELECT * FROM chesscom_players
-        ORDER BY blitz_rating DESC
-        LIMIT 20)
-
-        UNION
-
-        (SELECT * FROM chesscom_players
-        ORDER BY bullet_rating DESC
-        LIMIT 20)
-      ) AS top_players;*/
