@@ -9,7 +9,11 @@ const cron = require("node-cron");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const allowedOrigins = ["https://chess45.com", "https://www.chess45.com"];
+const allowedOrigins = [
+  "https://chess45.com",
+  "https://www.chess45.com",
+  "http://127.0.0.1:5500",
+];
 
 app.use(
   cors({
@@ -29,22 +33,54 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// Rate limit: 3 requests per minute per IP, applied to all API endpoints
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 3, // limit each IP to 3 requests per window
-  standardHeaders: true, // return rate limit info in RateLimit-* headers
-  legacyHeaders: false, // disable X-RateLimit-* headers
+// --- Per-route rate limiters ---
+
+// Puzzles: core gameplay, users may need several batches per session
+const puzzlesLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 25,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { error: "Too many requests, please try again in a minute." },
 });
 
-app.use(apiLimiter);
+// Leaderboard: mostly static data, moderate limit
+const chesscomLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, please try again in a minute." },
+});
+
+// Feedback: strict — one submission every 5 minutes is plenty
+const feedbackLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 1,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "Please wait a few minutes before sending another message.",
+  },
+});
+
+// --- Gmail transporter ---
+
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
+});
+
+// --- Routes ---
 
 app.get("/", (req, res) => {
   res.send("Chess API is running");
 });
 
-app.post("/puzzles", async (req, res) => {
+app.post("/puzzles", puzzlesLimiter, async (req, res) => {
   try {
     const ratingIds = Array.isArray(req.body?.ratingIds)
       ? req.body.ratingIds
@@ -66,7 +102,7 @@ app.post("/puzzles", async (req, res) => {
   }
 });
 
-app.get("/chesscom", async (req, res) => {
+app.get("/chesscom", chesscomLimiter, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT * FROM chesscom_players
@@ -79,30 +115,9 @@ app.get("/chesscom", async (req, res) => {
   }
 });
 
-// Gmail transporter (uses App Password — never your real Gmail password)
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD,
-  },
-});
-
-// Rate limit for feedback: 1 request per 5 minutes per IP (anti-spam)
-const feedbackLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000,
-  max: 1,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    error: "Please wait a few minutes before sending another message.",
-  },
-});
-
 app.post("/feedback", feedbackLimiter, async (req, res) => {
   const { name, email, message } = req.body || {};
 
-  // Basic validation
   if (!message || typeof message !== "string" || message.trim().length === 0) {
     return res.status(400).json({ error: "Message is required." });
   }
@@ -162,7 +177,7 @@ app.listen(PORT, () => {
 // Run once on startup
 updateChessComLeaderboards(pool);
 
-// Then refresh every 6 hours
+// Then refresh every hour
 cron.schedule("0 */1 * * *", () => {
   console.log("Running scheduled leaderboard update...");
   updateChessComLeaderboards(pool);
