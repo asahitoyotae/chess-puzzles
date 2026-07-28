@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
+const nodemailer = require("nodemailer");
 const pool = require("./database");
 const { updateChessComLeaderboards } = require("./helpers/chesscom");
 const cron = require("node-cron");
@@ -75,6 +76,82 @@ app.get("/chesscom", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).send("Database error");
+  }
+});
+
+// Gmail transporter (uses App Password — never your real Gmail password)
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
+});
+
+// Rate limit for feedback: 1 request per 5 minutes per IP (anti-spam)
+const feedbackLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 1,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "Please wait a few minutes before sending another message.",
+  },
+});
+
+app.post("/feedback", feedbackLimiter, async (req, res) => {
+  const { name, email, message } = req.body || {};
+
+  // Basic validation
+  if (!message || typeof message !== "string" || message.trim().length === 0) {
+    return res.status(400).json({ error: "Message is required." });
+  }
+  if (message.trim().length > 2000) {
+    return res
+      .status(400)
+      .json({ error: "Message must be under 2000 characters." });
+  }
+
+  const senderName = (name || "Anonymous").slice(0, 100);
+  const senderEmail = (email || "Not provided").slice(0, 200);
+
+  try {
+    await transporter.sendMail({
+      from: `"SOLVEchess Feedback" <${process.env.GMAIL_USER}>`,
+      to: process.env.FEEDBACK_RECIPIENT,
+      subject: `[SOLVEchess Feedback] from ${senderName}`,
+      text: [
+        `Name:    ${senderName}`,
+        `Email:   ${senderEmail}`,
+        ``,
+        `Message:`,
+        message.trim(),
+      ].join("\n"),
+      html: `
+        <div style="font-family:sans-serif;max-width:600px">
+          <h2 style="color:#333">New Feedback – SOLVEchess</h2>
+          <table style="border-collapse:collapse;width:100%">
+            <tr>
+              <td style="padding:6px 12px;font-weight:bold;background:#f5f5f5;border:1px solid #ddd">Name</td>
+              <td style="padding:6px 12px;border:1px solid #ddd">${senderName}</td>
+            </tr>
+            <tr>
+              <td style="padding:6px 12px;font-weight:bold;background:#f5f5f5;border:1px solid #ddd">Email</td>
+              <td style="padding:6px 12px;border:1px solid #ddd">${senderEmail}</td>
+            </tr>
+          </table>
+          <h3 style="margin-top:20px;color:#333">Message</h3>
+          <p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-left:4px solid #ccc">${message.trim()}</p>
+        </div>
+      `,
+    });
+
+    res.json({ success: true, message: "Feedback sent. Thank you!" });
+  } catch (err) {
+    console.error("Feedback email error:", err);
+    res
+      .status(500)
+      .json({ error: "Failed to send feedback. Please try again later." });
   }
 });
 
