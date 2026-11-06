@@ -9,11 +9,12 @@ const cron = require("node-cron");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const allowedOrigins = [
-  "https://chess45.com",
-  "https://www.chess45.com",
-  "http://127.0.0.1:5500",
-];
+// Render (and most hosts) put a reverse proxy in front of the app. Without
+// this, req.ip is the proxy's IP for EVERYONE, so every rate limiter below
+// becomes one shared bucket (feedback = 1 message per 5 min for the whole site).
+app.set("trust proxy", 1);
+
+const allowedOrigins = ["https://chess45.com", "https://www.chess45.com"];
 
 app.use(
   cors({
@@ -57,6 +58,7 @@ const chesscomLimiter = rateLimit({
 const feedbackLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
   max: 1,
+  skipFailedRequests: true, // a failed send shouldn't lock the user out
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -66,13 +68,66 @@ const feedbackLimiter = rateLimit({
 
 // --- Gmail transporter ---
 
+// NOTE: Render's free tier blocks outbound SMTP (ports 25/465/587) since
+// Sept 2025, so Gmail/SMTP only works on a paid instance or locally. When
+// RESEND_API_KEY is set we send over HTTPS instead, which always works.
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: process.env.GMAIL_USER,
     pass: process.env.GMAIL_APP_PASSWORD,
   },
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 15000,
 });
+
+const escapeHtml = (str) =>
+  String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const isEmail = (str) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str);
+
+async function deliverFeedback({ subject, text, html, replyTo }) {
+  const to = process.env.FEEDBACK_RECIPIENT;
+  if (!to) throw new Error("FEEDBACK_RECIPIENT is not set");
+
+  if (process.env.RESEND_API_KEY) {
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from:
+          process.env.RESEND_FROM ||
+          "chess45.com Feedback <onboarding@resend.dev>",
+        to: [to],
+        subject,
+        text,
+        html,
+        ...(replyTo ? { reply_to: replyTo } : {}),
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!r.ok) throw new Error(`Resend ${r.status}: ${await r.text()}`);
+    return;
+  }
+
+  await transporter.sendMail({
+    from: `"chess45.com Feedback" <${process.env.GMAIL_USER}>`,
+    to,
+    subject,
+    text,
+    html,
+    ...(replyTo ? { replyTo } : {}),
+  });
+}
 
 // --- Routes ---
 
@@ -92,6 +147,28 @@ app.post("/puzzles", puzzlesLimiter, async (req, res) => {
 
     const result = await pool.query(
       `SELECT * FROM puzzles WHERE ratingId = ANY($1::text[])`,
+      [ratingIds],
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send("Database error");
+  }
+});
+
+app.post("/endgame_puzzles", puzzlesLimiter, async (req, res) => {
+  try {
+    const ratingIds = Array.isArray(req.body?.ratingIds)
+      ? req.body.ratingIds
+      : [];
+
+    if (ratingIds.length === 0) {
+      return res.json([]);
+    }
+
+    const result = await pool.query(
+      `SELECT * FROM endgames_puzzles WHERE ratingId = ANY($1::text[])`,
       [ratingIds],
     );
 
@@ -127,43 +204,49 @@ app.post("/feedback", feedbackLimiter, async (req, res) => {
       .json({ error: "Message must be under 2000 characters." });
   }
 
-  const senderName = (name || "Anonymous").slice(0, 100);
-  const senderEmail = (email || "Not provided").slice(0, 200);
+  const senderName =
+    (typeof name === "string" && name.trim().slice(0, 100)) || "Anonymous";
+  const senderEmail =
+    (typeof email === "string" && email.trim().slice(0, 200)) || "Not provided";
+  const cleanMessage = message.trim();
 
   try {
-    await transporter.sendMail({
-      from: `"SOLVEchess Feedback" <${process.env.GMAIL_USER}>`,
-      to: process.env.FEEDBACK_RECIPIENT,
-      subject: `[SOLVEchess Feedback] from ${senderName}`,
+    await deliverFeedback({
+      subject: `[chess45.com Feedback] from ${senderName}`.replace(
+        /[\r\n]+/g,
+        " ",
+      ),
+      replyTo: isEmail(senderEmail) ? senderEmail : undefined,
       text: [
         `Name:    ${senderName}`,
         `Email:   ${senderEmail}`,
         ``,
         `Message:`,
-        message.trim(),
+        cleanMessage,
       ].join("\n"),
       html: `
         <div style="font-family:sans-serif;max-width:600px">
-          <h2 style="color:#333">New Feedback – SOLVEchess</h2>
+          <h2 style="color:#333">New Feedback – chess45.com</h2>
           <table style="border-collapse:collapse;width:100%">
             <tr>
               <td style="padding:6px 12px;font-weight:bold;background:#f5f5f5;border:1px solid #ddd">Name</td>
-              <td style="padding:6px 12px;border:1px solid #ddd">${senderName}</td>
+              <td style="padding:6px 12px;border:1px solid #ddd">${escapeHtml(senderName)}</td>
             </tr>
             <tr>
               <td style="padding:6px 12px;font-weight:bold;background:#f5f5f5;border:1px solid #ddd">Email</td>
-              <td style="padding:6px 12px;border:1px solid #ddd">${senderEmail}</td>
+              <td style="padding:6px 12px;border:1px solid #ddd">${escapeHtml(senderEmail)}</td>
             </tr>
           </table>
           <h3 style="margin-top:20px;color:#333">Message</h3>
-          <p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-left:4px solid #ccc">${message.trim()}</p>
+          <p style="white-space:pre-wrap;background:#f9f9f9;padding:12px;border-left:4px solid #ccc">${escapeHtml(cleanMessage)}</p>
         </div>
       `,
     });
 
     res.json({ success: true, message: "Feedback sent. Thank you!" });
   } catch (err) {
-    console.error("Feedback email error:", err);
+    // err.code is ETIMEDOUT / ECONNECTION when SMTP is blocked, EAUTH for a bad app password
+    console.error("Feedback email error:", err.code || "", err.message);
     res
       .status(500)
       .json({ error: "Failed to send feedback. Please try again later." });
