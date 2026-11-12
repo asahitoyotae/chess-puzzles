@@ -178,6 +178,27 @@ app.post("/endgame_puzzles", puzzlesLimiter, async (req, res) => {
     res.status(500).send("Database error");
   }
 });
+app.post("/middlegame_puzzles", puzzlesLimiter, async (req, res) => {
+  try {
+    const ratingIds = Array.isArray(req.body?.ratingIds)
+      ? req.body.ratingIds
+      : [];
+
+    if (ratingIds.length === 0) {
+      return res.json([]);
+    }
+
+    const result = await pool.query(
+      `SELECT * FROM middlegame_puzzles WHERE ratingId = ANY($1::text[])`,
+      [ratingIds],
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send("Database error");
+  }
+});
 
 app.get("/chesscom", chesscomLimiter, async (req, res) => {
   try {
