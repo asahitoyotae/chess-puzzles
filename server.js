@@ -14,7 +14,11 @@ const PORT = process.env.PORT || 3000;
 // becomes one shared bucket (feedback = 1 message per 5 min for the whole site).
 app.set("trust proxy", 1);
 
-const allowedOrigins = ["https://chess45.com", "https://www.chess45.com"];
+const allowedOrigins = [
+  "https://chess45.com",
+  "https://www.chess45.com",
+  "https://appassets.androidplatform.net",
+];
 
 app.use(
   cors({
